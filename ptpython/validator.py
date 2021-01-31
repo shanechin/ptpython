@@ -1,10 +1,8 @@
-from __future__ import unicode_literals
+from prompt_toolkit.validation import ValidationError, Validator
 
-from prompt_toolkit.validation import Validator, ValidationError
+from .utils import unindent_code
 
-__all__ = (
-    'PythonValidator',
-)
+__all__ = ["PythonValidator"]
 
 
 class PythonValidator(Validator):
@@ -14,6 +12,7 @@ class PythonValidator(Validator):
     :param get_compiler_flags: Callable that returns the currently
         active compiler flags.
     """
+
     def __init__(self, get_compiler_flags=None):
         self.get_compiler_flags = get_compiler_flags
 
@@ -21,9 +20,16 @@ class PythonValidator(Validator):
         """
         Check input for Python syntax errors.
         """
+        text = unindent_code(document.text)
+
         # When the input starts with Ctrl-Z, always accept. This means EOF in a
         # Python REPL.
-        if document.text.startswith('\x1a'):
+        if text.startswith("\x1a"):
+            return
+
+        # When the input starts with an exclamation mark. Accept as shell
+        # command.
+        if text.lstrip().startswith("!"):
             return
 
         try:
@@ -32,13 +38,20 @@ class PythonValidator(Validator):
             else:
                 flags = 0
 
-            compile(document.text, '<input>', 'exec', flags=flags, dont_inherit=True)
+            compile(text, "<input>", "exec", flags=flags, dont_inherit=True)
         except SyntaxError as e:
             # Note, the 'or 1' for offset is required because Python 2.7
             # gives `None` as offset in case of '4=4' as input. (Looks like
             # fixed in Python 3.)
-            index = document.translate_row_col_to_index(e.lineno - 1,  (e.offset or 1) - 1)
-            raise ValidationError(index, 'Syntax Error')
+            # TODO: This is not correct if indentation was removed.
+            index = document.translate_row_col_to_index(
+                e.lineno - 1, (e.offset or 1) - 1
+            )
+            raise ValidationError(index, f"Syntax Error: {e}")
         except TypeError as e:
             # e.g. "compile() expected string without null bytes"
             raise ValidationError(0, str(e))
+        except ValueError as e:
+            # In Python 2, compiling "\x9" (an invalid escape sequence) raises
+            # ValueError instead of SyntaxError.
+            raise ValidationError(0, "Syntax Error: %s" % e)
